@@ -1,0 +1,4 @@
+metric,value
+test_accuracy,0.9571428571428572
+macro_f1,0.959335131576775
+best_val_accuracy,0.9814432989690721

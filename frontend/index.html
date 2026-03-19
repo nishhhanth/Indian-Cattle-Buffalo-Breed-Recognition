@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Indian Cattle Intelligence Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+
+<body>
+  <div class="page">
+    <div class="background-blobs">
+      <div class="blob blob-1"></div>
+      <div class="blob blob-2"></div>
+      <div class="blob blob-3"></div>
+    </div>
+
+    <header class="shell fade-section">
+      <div class="brand">
+        <div class="brand-mark">
+          <span class="brand-circle"></span>
+        </div>
+        <div class="brand-copy">
+          <span class="brand-kicker">Neo-Minimal AgriVision</span>
+          <h1 class="brand-title">Indian Cattle Breed & Disease Classifier</h1>
+        </div>
+      </div>
+      <p class="brand-subtitle">
+        Upload a cattle or buffalo image and let the hybrid CNN&nbsp;+&nbsp;ViT model
+        identify the breed and detect common diseases with explainable statistics.
+      </p>
+    </header>
+
+    <main>
+      <section class="hero-grid">
+        <div class="hero-left fade-section">
+          <div class="hero-card glass">
+            <h2>Field‑ready A.I. for livestock decisions</h2>
+            <p class="hero-text">
+              Designed for veterinarians, researchers, and progressive farmers who want
+              calm, legible insights instead of noisy dashboards.
+            </p>
+            <div class="hero-stats">
+              <div class="stat-pill">
+                <span class="stat-label">Breeds covered</span>
+                <span class="stat-value">15</span>
+              </div>
+              <div class="stat-pill">
+                <span class="stat-label">Disease focus</span>
+                <span class="stat-value">3</span>
+              </div>
+              <div class="stat-pill">
+                <span class="stat-label">Optimized for</span>
+                <span class="stat-value">Field photos</span>
+              </div>
+            </div>
+            <ul class="hero-list">
+              <li>Hybrid CNN&nbsp;+&nbsp;ViT architecture tuned for Indian cattle</li>
+              <li>Lightweight disease head for fast triage</li>
+              <li>Readable confidence bands and narrative summaries</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="hero-right fade-section">
+          <div class="upload-panel glass">
+            <div class="upload-header">
+              <h2>Cattle Image Analyzer</h2>
+              <p class="upload-subtitle">
+                Drop a photo or tap to browse. Side‑on, well‑lit images work best.
+              </p>
+            </div>
+
+            <div class="upload-area" id="upload-area">
+              <div class="upload-inner">
+                <div class="upload-preview-wrapper">
+                  <div class="upload-preview scanning-layer" id="preview-container">
+                    <div class="scan-overlay" id="scan-overlay"></div>
+                    <img id="preview-image" alt="Preview" class="preview-image hidden" />
+                    <div class="preview-placeholder">
+                      <span class="placeholder-icon">⌾</span>
+                      <span class="placeholder-text">Your cattle image will appear here</span>
+                    </div>
+                  </div>
+                </div>
+                <label for="file-input" class="upload-cta pulse" id="upload-label">
+                  <input id="file-input" type="file" accept="image/*" hidden />
+                  <span class="upload-main">Upload a cattle image</span>
+                  <span class="upload-hint">JPG or PNG · up to ~10&nbsp;MB</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="upload-actions">
+              <button id="analyze-button" class="primary-button">
+                Analyze Now
+              </button>
+              <span class="processing-label" id="processing-label">Waiting for image…</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="results-grid">
+        <article class="result-card glass fade-section">
+          <header class="result-header">
+            <h3>Breed Intelligence</h3>
+            <span class="pill pill-sage">Hybrid CNN + ViT</span>
+          </header>
+          <p class="result-intro">
+            Top‑5 predicted breeds with confidence bands. Darker bars indicate
+            stronger agreement in the feature space.
+          </p>
+
+          <div id="breed-stats" class="confidence-list">
+            <p class="empty-copy">
+              Run an analysis to see breed probabilities and a narrated explanation here.
+            </p>
+          </div>
+
+          <div class="narrative" id="breed-info"></div>
+        </article>
+
+        <article class="result-card glass fade-section">
+          <header class="result-header">
+            <h3>Disease Triage</h3>
+            <span class="pill pill-warm">Risk bands</span>
+          </header>
+          <p class="result-intro">
+            Lightweight classifier for rapid triage. Use as a decision aid, not as a
+            substitute for veterinary diagnosis.
+          </p>
+
+          <div id="disease-stats" class="confidence-list">
+            <p class="empty-copy">
+              If disease detection weights are available on the server,
+              confidence scores will appear here.
+            </p>
+          </div>
+
+          <div class="narrative" id="disease-info"></div>
+        </article>
+      </section>
+
+      <section class="knowledge-panel glass fade-section">
+        <div class="knowledge-header">
+          <h3>Supported breeds & characteristics</h3>
+          <p>
+            The model currently recognizes 15 Indian cattle and buffalo breeds,
+            including Ayrshire, Gir, Kankrej, Sahiwal, Murrah, Nagpuri, and more.
+          </p>
+        </div>
+        <div class="knowledge-grid">
+          <div class="knowledge-chip">Heat‑tolerant dairy breeds</div>
+          <div class="knowledge-chip">Dual‑purpose & draft breeds</div>
+          <div class="knowledge-chip">Riverine buffalo variants</div>
+          <div class="knowledge-chip">High‑fat milk producers</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer fade-section">
+      <span>Built for research & field diagnostics.</span>
+      <span class="footer-dot">•</span>
+      <span>Always confirm with a licensed veterinarian.</span>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+
+</html>
