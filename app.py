@@ -545,5 +545,10 @@ async def api_predict(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    import os
+    
+    # Render sets a PORT environment variable. If not found, use 8000.
+    port = int(os.environ.get("PORT", 8000))
+    
+    # Note: 'reload=True' should typically be False in production
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
