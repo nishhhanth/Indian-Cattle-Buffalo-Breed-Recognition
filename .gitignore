@@ -1,8 +1,2 @@
 __pycache__
 .gradio
-best_efficientnet_b3
-best_efficientnet_b3.pt
-best_hybrid_model
-best_disease_model.pt
-repacked_model.pt
-run.bat
