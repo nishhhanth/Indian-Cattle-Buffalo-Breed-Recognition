@@ -133,7 +133,8 @@ document.addEventListener("DOMContentLoaded", () => {
       processingLabel.textContent = "Analysis complete.";
     } catch (err) {
       console.error(err);
-      processingLabel.textContent = "Something went wrong. Check the server logs.";
+      const message = err && err.message ? err.message : "Something went wrong. Check the server logs.";
+      processingLabel.textContent = message;
     } finally {
       analyzeButton.disabled = false;
       uploadArea.classList.remove("scanning-active");

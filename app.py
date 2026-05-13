@@ -6,6 +6,8 @@ import os
 import glob
 import io
 import functools
+import gc
+import traceback
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -85,6 +87,7 @@ def get_disease_model(device, num_classes):
 
 
 torch.set_num_threads(int(os.environ.get("TORCH_NUM_THREADS", "1")))
+torch.set_num_interop_threads(int(os.environ.get("TORCH_NUM_INTEROP_THREADS", "1")))
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
@@ -272,6 +275,7 @@ MODEL_LOADED = False
 DISEASE_MODEL_LOADED = False
 model: Optional[nn.Module] = None
 disease_model: Optional[nn.Module] = None
+ENABLE_INT8_DYNAMIC = os.environ.get("ENABLE_INT8_DYNAMIC", "1") == "1"
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(CURRENT_DIR, "best_hybrid_model")
@@ -300,6 +304,8 @@ def _load_breed_model() -> nn.Module:
             state_dict = torch.load(REPACKED_PATH, map_location=device)
             m.load_state_dict(state_dict)
             print("Model loaded successfully!")
+            del state_dict
+            gc.collect()
         else:
             raise FileNotFoundError(f"Could not create or find {REPACKED_PATH}")
     else:
@@ -312,8 +318,17 @@ def _load_breed_model() -> nn.Module:
             print(f"Attempting to load: {candidates[0]}")
             state_dict = torch.load(candidates[0], map_location=device)
             m.load_state_dict(state_dict)
+            del state_dict
+            gc.collect()
         else:
             raise FileNotFoundError("Could not find model weights file or directory.")
+
+    if ENABLE_INT8_DYNAMIC and device.type == "cpu":
+        try:
+            m = torch.quantization.quantize_dynamic(m, {nn.Linear}, dtype=torch.qint8)
+            print("Applied dynamic int8 quantization to breed model (Linear layers).")
+        except Exception as e:
+            print(f"WARNING: Could not quantize breed model: {e}")
 
     m.to(device)
     m.eval()
@@ -352,6 +367,12 @@ def _load_disease_model() -> Optional[nn.Module]:
     try:
         dm = get_disease_model(device, num_classes=len(DISEASE_CLASSES))
         load_disease_model_weights(dm, device)
+        if ENABLE_INT8_DYNAMIC and device.type == "cpu":
+            try:
+                dm = torch.quantization.quantize_dynamic(dm, {nn.Linear}, dtype=torch.qint8)
+                print("Applied dynamic int8 quantization to disease model (Linear layers).")
+            except Exception as e:
+                print(f"WARNING: Could not quantize disease model: {e}")
         dm.to(device)
         dm.eval()
         disease_model = dm
@@ -515,62 +536,67 @@ async def api_predict(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Could not read image file.")
 
-    # 1) First: block obvious non-cattle (dog/cat/etc.) without training anything.
-    is_cattle, gate_debug = _is_cattle_by_imagenet(image, threshold=0.20)
+    try:
+        # 1) First: block obvious non-cattle (dog/cat/etc.) without training anything.
+        is_cattle, gate_debug = _is_cattle_by_imagenet(image, threshold=0.20)
 
-    # 2) If ImageNet gate is disabled, fallback to a simple confidence heuristic.
-    #    (We keep this simple and fast; no extra models.)
-    if gate_debug.get("gate") == "disabled":
-        img_tensor = preprocess(image).unsqueeze(0).to(device)
-        with torch.inference_mode():
-            breed_output = _load_breed_model()(img_tensor)
-            breed_probabilities = torch.nn.functional.softmax(breed_output[0], dim=0)
-        is_cattle, gate_debug = _is_cattle_by_breed_confidence(breed_probabilities, threshold=0.65)
+        # 2) If ImageNet gate is disabled, fallback to a simple confidence heuristic.
+        #    (We keep this simple and fast; no extra models.)
+        if gate_debug.get("gate") == "disabled":
+            img_tensor = preprocess(image).unsqueeze(0).to(device)
+            with torch.inference_mode():
+                breed_output = _load_breed_model()(img_tensor)
+                breed_probabilities = torch.nn.functional.softmax(breed_output[0], dim=0)
+            is_cattle, gate_debug = _is_cattle_by_breed_confidence(breed_probabilities, threshold=0.65)
 
-    if not is_cattle:
-        detected = None
-        if gate_debug.get("gate") == "imagenet":
-            top5 = gate_debug.get("top5") or []
-            if isinstance(top5, list) and len(top5) > 0:
-                detected = top5[0].get("label")
+        if not is_cattle:
+            detected = None
+            if gate_debug.get("gate") == "imagenet":
+                top5 = gate_debug.get("top5") or []
+                if isinstance(top5, list) and len(top5) > 0:
+                    detected = top5[0].get("label")
 
-        if detected:
-            breed_msg = f"This image looks like {detected}. This classifier is only for cattle breeds."
-        else:
-            breed_msg = "This image doesn't look like cattle. This classifier is only for cattle breeds."
+            if detected:
+                breed_msg = f"This image looks like {detected}. This classifier is only for cattle breeds."
+            else:
+                breed_msg = "This image doesn't look like cattle. This classifier is only for cattle breeds."
+
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "breed_predictions": [],
+                    "breed_info": breed_msg,
+                    "disease_predictions": [],
+                    "disease_info": "",
+                    "rejected": True,
+                    "rejection_reason": "non_cattle",
+                    "gate_debug": gate_debug,
+                },
+            )
+
+        breed_result, breed_info_text, disease_result, disease_info_text = predict_cattle(image)
+
+        breed_predictions = [
+            {"label": label, "score": float(score)}
+            for label, score in breed_result.items()
+        ]
+        disease_predictions = [
+            {"label": label, "score": float(score)}
+            for label, score in disease_result.items()
+        ]
 
         return JSONResponse(
-            status_code=200,
-            content={
-                "breed_predictions": [],
-                "breed_info": breed_msg,
-                "disease_predictions": [],
-                "disease_info": "",
-                "rejected": True,
-                "rejection_reason": "non_cattle",
-                "gate_debug": gate_debug,
-            },
+            {
+                "breed_predictions": breed_predictions,
+                "breed_info": breed_info_text,
+                "disease_predictions": disease_predictions,
+                "disease_info": disease_info_text,
+            }
         )
-
-    breed_result, breed_info_text, disease_result, disease_info_text = predict_cattle(image)
-
-    breed_predictions = [
-        {"label": label, "score": float(score)}
-        for label, score in breed_result.items()
-    ]
-    disease_predictions = [
-        {"label": label, "score": float(score)}
-        for label, score in disease_result.items()
-    ]
-
-    return JSONResponse(
-        {
-            "breed_predictions": breed_predictions,
-            "breed_info": breed_info_text,
-            "disease_predictions": disease_predictions,
-            "disease_info": disease_info_text,
-        }
-    )
+    except Exception as e:
+        print("ERROR during /api/predict")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
 
 
 if __name__ == "__main__":
