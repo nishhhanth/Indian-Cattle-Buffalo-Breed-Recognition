@@ -1,6 +1,13 @@
-torch>=2.0.0
-torchvision>=0.15.0
-gradio>=3.0.0
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Render/Linux: force CPU wheels to avoid CUDA/NVIDIA deps (memory blowups)
+torch==2.11.0+cpu; platform_system=="Linux"
+torchvision==0.26.0+cpu; platform_system=="Linux"
+
+# Local Windows dev: standard wheels are fine
+torch==2.11.0; platform_system=="Windows"
+torchvision==0.26.0; platform_system=="Windows"
+
 Pillow>=9.0.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0

@@ -5,6 +5,7 @@ from PIL import Image
 import os
 import glob
 import io
+import functools
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -83,10 +84,7 @@ def get_disease_model(device, num_classes):
     return disease_model
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
-
-
+torch.set_num_threads(int(os.environ.get("TORCH_NUM_THREADS", "1")))
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
@@ -99,6 +97,7 @@ import shutil
 IMAGENET_GATE_MODEL: Optional[nn.Module] = None
 IMAGENET_GATE_PREPROCESS = None
 IMAGENET_GATE_CATEGORIES = None
+IMAGENET_GATE_ENABLED = os.environ.get("ENABLE_IMAGENET_GATE", "0") == "1"
 
 _CATTLE_KEYWORDS = (
     "cow",
@@ -120,6 +119,12 @@ def _init_imagenet_gate(device: torch.device) -> None:
     breed-model confidence heuristic.
     """
     global IMAGENET_GATE_MODEL, IMAGENET_GATE_PREPROCESS, IMAGENET_GATE_CATEGORIES
+    if not IMAGENET_GATE_ENABLED:
+        IMAGENET_GATE_MODEL = None
+        IMAGENET_GATE_PREPROCESS = None
+        IMAGENET_GATE_CATEGORIES = None
+        print("ImageNet gate disabled (ENABLE_IMAGENET_GATE=0).")
+        return
     try:
         weights = models.ResNet50_Weights.IMAGENET1K_V2
         gate = models.resnet50(weights=weights)
@@ -141,11 +146,15 @@ def _is_cattle_by_imagenet(image: Image.Image, threshold: float = 0.20) -> Tuple
     """
     Returns (is_cattle, debug_info). Uses a pre-trained ImageNet model if available.
     """
+    # Lazy-init so Render can bind the port quickly.
+    if IMAGENET_GATE_MODEL is None and IMAGENET_GATE_ENABLED:
+        _init_imagenet_gate(device)
+
     if IMAGENET_GATE_MODEL is None or IMAGENET_GATE_PREPROCESS is None or not IMAGENET_GATE_CATEGORIES:
         return True, {"gate": "disabled"}
 
     x = IMAGENET_GATE_PREPROCESS(image).unsqueeze(0).to(device)
-    with torch.no_grad():
+    with torch.inference_mode():
         logits = IMAGENET_GATE_MODEL(x)[0]
         probs = torch.nn.functional.softmax(logits, dim=0)
         topk_prob, topk_idx = torch.topk(probs, 5)
@@ -168,9 +177,6 @@ def _is_cattle_by_breed_confidence(breed_probabilities: torch.Tensor, threshold:
     """
     top1 = float(torch.max(breed_probabilities).item())
     return top1 >= threshold, {"gate": "breed_confidence", "top1": top1, "threshold": threshold}
-
-
-_init_imagenet_gate(device)
 
 
 def repack_model(folder_path, output_path):
@@ -262,49 +268,58 @@ def load_disease_model_weights(disease_model, device):
         f"and {skipped_keys} skipped from checkpoint."
     )
 
-model = get_model(device)
+MODEL_LOADED = False
+DISEASE_MODEL_LOADED = False
+model: Optional[nn.Module] = None
+disease_model: Optional[nn.Module] = None
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(CURRENT_DIR, "best_hybrid_model")
 REPACKED_PATH = os.path.join(CURRENT_DIR, "repacked_model.pt")
 
-if os.path.exists(MODEL_DIR):
-    # Check if we need to repack
-    if not os.path.exists(REPACKED_PATH):
-        try:
-            repack_model(MODEL_DIR, REPACKED_PATH)
-        except Exception as e:
-            print(f"Error repacking model: {e}")
-    
-    if os.path.exists(REPACKED_PATH):
-        try:
+def _load_breed_model() -> nn.Module:
+    """
+    Lazy-load the breed model so the server can bind $PORT quickly on Render.
+    """
+    global MODEL_LOADED, model
+    if MODEL_LOADED and model is not None:
+        return model
+
+    m = get_model(device)
+
+    if os.path.exists(MODEL_DIR):
+        # Check if we need to repack
+        if not os.path.exists(REPACKED_PATH):
+            try:
+                repack_model(MODEL_DIR, REPACKED_PATH)
+            except Exception as e:
+                print(f"Error repacking model: {e}")
+
+        if os.path.exists(REPACKED_PATH):
             print(f"Loading model from {REPACKED_PATH}...")
             state_dict = torch.load(REPACKED_PATH, map_location=device)
-            model.load_state_dict(state_dict)
+            m.load_state_dict(state_dict)
             print("Model loaded successfully!")
-        except Exception as e:
-            print(f"Error loading repacked model: {e}")
-            raise e
+        else:
+            raise FileNotFoundError(f"Could not create or find {REPACKED_PATH}")
     else:
-        raise FileNotFoundError(f"Could not create or find {REPACKED_PATH}")
+        # Fallback search for any .pt file
+        print(f"Directory {MODEL_DIR} not found. Searching for .pt files...")
+        candidates = glob.glob(os.path.join(CURRENT_DIR, "*.pt"))
+        candidates = [c for c in candidates if "repacked_model.pt" not in c and os.path.isfile(c)]
 
-else:
-    # Fallback search for any .pt file
-    print(f"Directory {MODEL_DIR} not found. Searching for .pt files...")
-    import glob
-    candidates = glob.glob(os.path.join(CURRENT_DIR, "*.pt"))
-    # Filter out repacked_model.pt if it's there
-    candidates = [c for c in candidates if "repacked_model.pt" not in c and os.path.isfile(c)]
-    
-    if candidates:
-        print(f"Attempting to load: {candidates[0]}")
-        state_dict = torch.load(candidates[0], map_location=device)
-        model.load_state_dict(state_dict)
-    else:
-        raise FileNotFoundError("Could not find model weights file or directory.")
+        if candidates:
+            print(f"Attempting to load: {candidates[0]}")
+            state_dict = torch.load(candidates[0], map_location=device)
+            m.load_state_dict(state_dict)
+        else:
+            raise FileNotFoundError("Could not find model weights file or directory.")
 
-model.to(device)
-model.eval()
+    m.to(device)
+    m.eval()
+    model = m
+    MODEL_LOADED = True
+    return m
 
 
 DISEASE_CLASSES = [
@@ -329,14 +344,23 @@ DISEASE_INFO = {
     ),
 }
 
-try:
-    disease_model = get_disease_model(device, num_classes=len(DISEASE_CLASSES))
-    load_disease_model_weights(disease_model, device)
-    disease_model.to(device)
-    disease_model.eval()
-except Exception as e:
-    print(f"WARNING: Disease model is not available: {e}")
-    disease_model = None
+def _load_disease_model() -> Optional[nn.Module]:
+    global DISEASE_MODEL_LOADED, disease_model
+    if DISEASE_MODEL_LOADED:
+        return disease_model
+
+    try:
+        dm = get_disease_model(device, num_classes=len(DISEASE_CLASSES))
+        load_disease_model_weights(dm, device)
+        dm.to(device)
+        dm.eval()
+        disease_model = dm
+    except Exception as e:
+        print(f"WARNING: Disease model is not available: {e}")
+        disease_model = None
+
+    DISEASE_MODEL_LOADED = True
+    return disease_model
 
 
 CLASSES = [
@@ -377,18 +401,21 @@ def predict_cattle(image):
     if image is None:
         return {}, "", {}, ""
 
+    breed_model = _load_breed_model()
+    dm = _load_disease_model()
+
     # Preprocess once and use for both models
     img_tensor = preprocess(image).unsqueeze(0).to(device)
 
-    with torch.no_grad():
+    with torch.inference_mode():
         # Breed prediction
-        breed_output = model(img_tensor)
+        breed_output = breed_model(img_tensor)
         breed_probabilities = torch.nn.functional.softmax(breed_output[0], dim=0)
 
         # Disease prediction (if model is available)
         disease_probabilities = None
-        if disease_model is not None:
-            disease_output = disease_model(img_tensor)
+        if dm is not None:
+            disease_output = dm(img_tensor)
             disease_probabilities = torch.nn.functional.softmax(disease_output[0], dim=0)
 
     # Breed: top 5 results
@@ -468,7 +495,10 @@ async def health_check():
     return {
         "status": "ok",
         "device": str(device),
-        "disease_model_available": disease_model is not None,
+        "breed_model_loaded": MODEL_LOADED,
+        "disease_model_loaded": DISEASE_MODEL_LOADED,
+        "disease_model_available": disease_model is not None if DISEASE_MODEL_LOADED else False,
+        "imagenet_gate_enabled": IMAGENET_GATE_ENABLED,
         "num_breeds": len(CLASSES),
         "num_disease_classes": len(DISEASE_CLASSES),
     }
@@ -492,8 +522,8 @@ async def api_predict(file: UploadFile = File(...)):
     #    (We keep this simple and fast; no extra models.)
     if gate_debug.get("gate") == "disabled":
         img_tensor = preprocess(image).unsqueeze(0).to(device)
-        with torch.no_grad():
-            breed_output = model(img_tensor)
+        with torch.inference_mode():
+            breed_output = _load_breed_model()(img_tensor)
             breed_probabilities = torch.nn.functional.softmax(breed_output[0], dim=0)
         is_cattle, gate_debug = _is_cattle_by_breed_confidence(breed_probabilities, threshold=0.65)
 
